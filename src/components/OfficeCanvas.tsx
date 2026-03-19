@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { CAST } from '../data/cast';
-import { SCENES } from '../data/scenes';
+import { SCENES, SCENES_BY_ID } from '../data/scenes';
 
 // ── Virtual canvas dimensions (scale to fit actual screen) ──────
 const VW = 960;
@@ -106,7 +106,8 @@ type Activity =
   | 'walking_to_elevator' | 'in_elevator'               // going to another floor
   | 'walking_from_elevator' | 'exploring'               // on foreign floor
   | 'walking_back_to_elevator' | 'in_elevator_return'   // returning home
-  | 'walking_to_desk';                                  // last leg home
+  | 'walking_to_desk'                                   // last leg home
+  | 'walking_to_conv' | 'chatting';                     // NPC conversation
 
 interface NpcAnim {
   isActive: boolean;
@@ -124,6 +125,8 @@ interface NpcAnim {
   elevFromFloor: number;
   elevToFloor: number;
   elevProgress: number;        // 0→1 during elevator ride
+  convMeetX?: number;          // target X when walking to a conversation spot
+  convFacingLeft?: boolean;    // face left while chatting (rightmost participant)
 }
 
 interface Packet {
@@ -171,6 +174,63 @@ const AGENT_TO_CAST: Partial<Record<AgentId, string>> = {
   'llama3':        'llama',
   'qwen-mini':     'qwen',
 };
+
+// Reverse cast-id → AgentId (used when filtering scene dialogue)
+const CAST_TO_AGENT: Partial<Record<string, AgentId>> = {
+  'main':        'main',
+  'opus':        'claude-opus',
+  'kimi':        'research',
+  'claude_code': 'claude-code',
+  'codex':       'codex',
+  'mistral':     'mistral',
+  'llama':       'llama3',
+  'qwen':        'qwen-mini',
+};
+
+interface ConvTemplate {
+  sceneId: string;
+  floor: number;
+  participants: AgentId[];
+  meetXs: Partial<Record<AgentId, number>>;
+  castFilter: string[];  // which cast IDs to include from the scene dialogue
+}
+
+// Conversation setups: pairs/groups that will walk together and do a scene
+const CONV_TEMPLATES: ConvTemplate[] = [
+  // Floor 2: main ↔ claude-opus
+  { sceneId: 'kimi_overbooked', floor: 2, participants: ['main', 'claude-opus'],
+    meetXs: { 'main': 185, 'claude-opus': 255 }, castFilter: ['main', 'opus'] },
+  { sceneId: 'new_ticket',      floor: 2, participants: ['main', 'claude-opus'],
+    meetXs: { 'main': 185, 'claude-opus': 255 }, castFilter: ['main', 'opus'] },
+  { sceneId: 'budget_meeting',  floor: 2, participants: ['main', 'claude-opus'],
+    meetXs: { 'main': 185, 'claude-opus': 255 }, castFilter: ['main', 'opus'] },
+  // Floor 1: claude-code ↔ codex
+  { sceneId: 'code_review',     floor: 1, participants: ['claude-code', 'codex'],
+    meetXs: { 'claude-code': 370, 'codex': 440 }, castFilter: ['claude_code', 'codex'] },
+  { sceneId: 'cron_broke',      floor: 1, participants: ['claude-code', 'codex'],
+    meetXs: { 'claude-code': 370, 'codex': 440 }, castFilter: ['claude_code', 'codex'] },
+  // Floor 1: research ↔ claude-code
+  { sceneId: 'kimi_overbooked', floor: 1, participants: ['research', 'claude-code'],
+    meetXs: { 'research': 185, 'claude-code': 255 }, castFilter: ['kimi', 'claude_code'] },
+  { sceneId: 'budget_meeting',  floor: 1, participants: ['research', 'claude-code'],
+    meetXs: { 'research': 185, 'claude-code': 255 }, castFilter: ['kimi', 'claude_code'] },
+  // Floor 0: all three support agents
+  { sceneId: 'morning_standup', floor: 0, participants: ['mistral', 'llama3', 'qwen-mini'],
+    meetXs: { 'mistral': 230, 'llama3': 330, 'qwen-mini': 420 }, castFilter: ['mistral', 'llama', 'qwen'] },
+  { sceneId: 'cron_broke',      floor: 0, participants: ['qwen-mini', 'llama3', 'mistral'],
+    meetXs: { 'qwen-mini': 230, 'llama3': 330, 'mistral': 420 }, castFilter: ['qwen', 'llama', 'mistral'] },
+  // Floor 0: mistral + llama
+  { sceneId: 'budget_meeting',  floor: 0, participants: ['mistral', 'llama3'],
+    meetXs: { 'mistral': 240, 'llama3': 320 }, castFilter: ['mistral', 'llama'] },
+];
+
+interface ConvGroup {
+  template: ConvTemplate;
+  lines: Array<{ agentId: AgentId; text: string }>;
+  lineIndex: number;
+  lineTimer: number;
+  phase: 'walking' | 'chatting' | 'returning';
+}
 
 const DEEPSEEK_LINES = [
   'Running inference.',
@@ -507,6 +567,7 @@ function drawStandingPerson(
   clockTime: number,
   activity: 'walking_away' | 'away' | 'walking_back',
   activityTarget: 'water' | 'bathroom' | null,
+  facingLeft = false,
 ): void {
   const ground = carpetY(floor);
   const isWalking = activity === 'walking_away' || activity === 'walking_back';
@@ -540,7 +601,7 @@ function drawStandingPerson(
     ctx.fillRect(x + 8,  ground - 62, 6, 18);
   }
   // Head
-  const hx = x + (activity === 'walking_back' ? -2 : 2);
+  const hx = facingLeft ? x - 2 : x + (activity === 'walking_back' ? -2 : 2);
   ctx.fillStyle = '#F5CBA7';
   ctx.beginPath();
   ctx.ellipse(hx, ground - 78 + headBob, 9, 11, 0, 0, Math.PI * 2);
@@ -562,6 +623,8 @@ export const OfficeCanvas = () => {
   const lastTime     = useRef<number>(0);
   const clock        = useRef<number>(0);
   const elevCarFloor = useRef<number>(0);  // animated elevator car position (float floor)
+  const convGroup    = useRef<ConvGroup | null>(null);
+  const nextConvIn   = useRef<number>(20 + Math.random() * 30);
 
   // Init chat bubble state once
   if (chatBubbles.current.size === 0) {
@@ -979,16 +1042,19 @@ export const OfficeCanvas = () => {
       if (anim.activity === 'away' && anim.activityTarget === 'bathroom') continue;
       // Use currentFloor so explorer shows on the correct floor
       const drawFloor = anim.currentFloor ?? def.floor;
+      const isChatting = anim.activity === 'chatting';
       const drawAct = (
         anim.activity === 'exploring' ||
         anim.activity === 'walking_from_elevator' ||
         anim.activity === 'walking_back_to_elevator' ||
-        anim.activity === 'walking_to_desk'
-      ) ? 'walking_away' : anim.activity;
+        anim.activity === 'walking_to_desk' ||
+        anim.activity === 'walking_to_conv'
+      ) ? 'walking_away' : isChatting ? 'away' : anim.activity;
       drawStandingPerson(
         ctx, anim.personX, drawFloor, def.color, clock.current,
         drawAct as 'walking_away' | 'away' | 'walking_back',
         anim.activityTarget === 'wander' || anim.activityTarget === 'elevator' ? null : anim.activityTarget,
+        isChatting && anim.convFacingLeft === true,
       );
     }
 
@@ -1396,6 +1462,145 @@ export const OfficeCanvas = () => {
           anim.activityTarget = null; anim.personX = def.deskX;
           anim.nextActivityIn = NEXT_MIN + Math.random() * (NEXT_MAX - NEXT_MIN);
         });
+
+      // ── Conversation activities ────────────────────────────────────
+      } else if (anim.activity === 'walking_to_conv') {
+        const meetX = anim.convMeetX ?? def.deskX;
+        walkTo(meetX, 'chatting');
+
+      } else if (anim.activity === 'chatting') {
+        anim.personX = anim.convMeetX ?? anim.personX;
+      }
+    }
+
+    // ── Conversation group management ─────────────────────────────────
+    {
+      const cg = convGroup.current;
+      const activeAgentsNow = useGameStore.getState().activeAgents;
+
+      if (cg) {
+        // If any participant became actively working, interrupt the conversation
+        const anyWorking = cg.template.participants.some(id => {
+          const a = npcAnims.current.get(id);
+          return a && (a.isActive || activeAgentsNow.has(id));
+        });
+        if (anyWorking) {
+          for (const id of cg.template.participants) {
+            const a = npcAnims.current.get(id);
+            if (a && (a.activity === 'chatting' || a.activity === 'walking_to_conv')) {
+              a.activity = 'walking_back';
+              a.walkFromX = a.personX;
+              a.walkProgress = 0;
+              a.activityTarget = null;
+            }
+            const b = chatBubbles.current.get(id);
+            if (b) b.pauseTimer = 5 + Math.random() * 10;
+          }
+          convGroup.current = null;
+          nextConvIn.current = 20 + Math.random() * 30;
+
+        } else if (cg.phase === 'walking') {
+          // Wait for all participants to arrive at their meeting spots
+          const allArrived = cg.template.participants.every(
+            id => npcAnims.current.get(id)?.activity === 'chatting'
+          );
+          if (allArrived) {
+            cg.phase = 'chatting';
+            cg.lineIndex = -1;
+            cg.lineTimer = 0;
+          }
+
+        } else if (cg.phase === 'chatting') {
+          cg.lineTimer -= delta;
+          if (cg.lineTimer <= 0) {
+            cg.lineIndex++;
+            if (cg.lineIndex >= cg.lines.length) {
+              // Scene complete — send everyone back to their desks
+              cg.phase = 'returning';
+              for (const id of cg.template.participants) {
+                const a = npcAnims.current.get(id);
+                if (a) {
+                  a.activity = 'walking_back';
+                  a.walkFromX = a.personX;
+                  a.walkProgress = 0;
+                  a.activityTarget = null;
+                }
+                const b = chatBubbles.current.get(id);
+                if (b) b.pauseTimer = 8 + Math.random() * 15;
+              }
+            } else {
+              const line = cg.lines[cg.lineIndex];
+              const displayTime = 3 + line.text.length * 0.025;
+              cg.lineTimer = displayTime;
+              // Inject this line into the speaker's chat bubble
+              const bubble = chatBubbles.current.get(line.agentId);
+              if (bubble) {
+                bubble.text = line.text;
+                bubble.displayDuration = displayTime;
+                bubble.displayTimer = displayTime;
+                bubble.alpha = 1;
+                bubble.pauseTimer = 0;
+              }
+            }
+          }
+
+        } else if (cg.phase === 'returning') {
+          // Wait for all participants to reach their desks
+          const allBack = cg.template.participants.every(
+            id => npcAnims.current.get(id)?.activity === 'desk'
+          );
+          if (allBack) {
+            convGroup.current = null;
+            nextConvIn.current = 30 + Math.random() * 45;
+          }
+        }
+
+      } else {
+        // Countdown to the next spontaneous conversation
+        nextConvIn.current -= delta;
+        if (nextConvIn.current <= 0) {
+          const eligible = CONV_TEMPLATES.filter(t =>
+            t.participants.every(id => {
+              const a = npcAnims.current.get(id);
+              return a?.activity === 'desk' && !a.isActive && !activeAgentsNow.has(id);
+            })
+          );
+          if (eligible.length === 0) {
+            nextConvIn.current = 10 + Math.random() * 15;
+          } else {
+            const template = eligible[Math.floor(Math.random() * eligible.length)];
+            const scene = SCENES_BY_ID[template.sceneId];
+            const lines = scene.dialogue
+              .filter(l => template.castFilter.includes(l.speaker))
+              .map(l => ({ agentId: CAST_TO_AGENT[l.speaker]!, text: l.text }))
+              .filter(l => l.agentId != null);
+
+            if (lines.length === 0) {
+              nextConvIn.current = 10 + Math.random() * 15;
+            } else {
+              convGroup.current = { template, lines, lineIndex: -1, lineTimer: 0, phase: 'walking' };
+
+              // Sort by meetX to determine facing direction (rightmost faces left)
+              const sorted = [...template.participants].sort(
+                (a, b) => (template.meetXs[a] ?? 0) - (template.meetXs[b] ?? 0)
+              );
+              for (let pi = 0; pi < sorted.length; pi++) {
+                const id = sorted[pi];
+                const a = npcAnims.current.get(id);
+                if (!a) continue;
+                a.convMeetX = template.meetXs[id] ?? a.personX;
+                a.convFacingLeft = pi === sorted.length - 1;
+                a.activity = 'walking_to_conv';
+                a.walkFromX = a.personX;
+                a.walkProgress = 0;
+                a.activityTarget = null;
+                // Suppress random chatter while in a scene conversation
+                const b = chatBubbles.current.get(id);
+                if (b) { b.pauseTimer = 999; b.alpha = 0; b.text = ''; }
+              }
+            }
+          }
+        }
       }
     }
 
