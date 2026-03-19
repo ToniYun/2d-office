@@ -1,5 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useGameStore } from '../store/gameStore';
+import { CAST } from '../data/cast';
+import { SCENES } from '../data/scenes';
 
 // ── Virtual canvas dimensions (scale to fit actual screen) ──────
 const VW = 960;
@@ -138,6 +140,81 @@ function rgba(hex: string, a: number): string {
   const g = parseInt(hex.slice(3, 5), 16);
   const b = parseInt(hex.slice(5, 7), 16);
   return `rgba(${r},${g},${b},${a})`;
+}
+
+// ── Chat bubble helpers ───────────────────────────────────────────
+function wrapText(text: string, maxChars: number): string[] {
+  const words = text.split(' ');
+  const lines: string[] = [];
+  let current = '';
+  for (const word of words) {
+    const candidate = current ? current + ' ' + word : word;
+    if (candidate.length <= maxChars) {
+      current = candidate;
+    } else {
+      if (current) lines.push(current);
+      current = word.length > maxChars ? word.slice(0, maxChars - 1) + '…' : word;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
+// Map canvas AgentId → cast member id
+const AGENT_TO_CAST: Partial<Record<AgentId, string>> = {
+  'main':          'main',
+  'claude-opus':   'opus',
+  'research':      'kimi',
+  'claude-code':   'claude_code',
+  'codex':         'codex',
+  'mistral':       'mistral',
+  'llama3':        'llama',
+  'qwen-mini':     'qwen',
+};
+
+const DEEPSEEK_LINES = [
+  'Running inference.',
+  'Context window: nominal.',
+  'Diff generated.',
+  'Compilation done.',
+  'Throughput steady.',
+  'Output finalized.',
+  'Checking edge cases.',
+  'Model loaded.',
+];
+
+// Build dialogue pool from scenes + cast example lines (IIFE so it runs once)
+const DIALOGUE_POOL: Record<string, string[]> = (() => {
+  const pool: Record<string, string[]> = {};
+  for (const scene of SCENES) {
+    for (const line of scene.dialogue) {
+      if (!pool[line.speaker]) pool[line.speaker] = [];
+      pool[line.speaker].push(line.text);
+    }
+  }
+  for (const cast of CAST) {
+    if (!pool[cast.id]) pool[cast.id] = [];
+    if (!pool[cast.id].includes(cast.exampleLine)) {
+      pool[cast.id].unshift(cast.exampleLine);
+    }
+  }
+  return pool;
+})();
+
+function getAgentLines(agentId: AgentId): string[] {
+  if (agentId === 'deepseek-coder') return DEEPSEEK_LINES;
+  const castId = AGENT_TO_CAST[agentId];
+  if (!castId) return [];
+  return DIALOGUE_POOL[castId] ?? [];
+}
+
+interface ChatBubble {
+  lines: string[];
+  text: string;
+  displayTimer: number;
+  displayDuration: number;
+  pauseTimer: number;
+  alpha: number;
 }
 
 // Draw one seated worker + their workstation (side-view, Corp Inc. style)
@@ -480,10 +557,27 @@ export const OfficeCanvas = () => {
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const npcAnims     = useRef<Map<AgentId, NpcAnim>>(new Map());
   const packets      = useRef<Packet[]>([]);
+  const chatBubbles  = useRef<Map<AgentId, ChatBubble>>(new Map());
   const rafId        = useRef<number>(0);
   const lastTime     = useRef<number>(0);
   const clock        = useRef<number>(0);
   const elevCarFloor = useRef<number>(0);  // animated elevator car position (float floor)
+
+  // Init chat bubble state once
+  if (chatBubbles.current.size === 0) {
+    for (const a of AGENTS) {
+      const lines = getAgentLines(a.id);
+      if (lines.length === 0) continue;
+      chatBubbles.current.set(a.id, {
+        lines,
+        text: '',
+        displayTimer: 0,
+        displayDuration: 0,
+        pauseTimer: 3 + Math.random() * 20,  // stagger initial appearances
+        alpha: 0,
+      });
+    }
+  }
 
   // Init NPC animation state once
   if (npcAnims.current.size === 0) {
@@ -898,6 +992,128 @@ export const OfficeCanvas = () => {
       );
     }
 
+    // ── Chat bubbles ──────────────────────────────────────────────────
+    {
+      const BUBBLE_W  = 152;
+      const PAD       = 7;
+      const LINE_H    = 12;
+      const TAIL_H    = 7;
+      const TAIL_BASE = 10;
+      const MAX_CHARS = 25;
+      const RADIUS    = 5;
+
+      type BubbleToDraw = {
+        wrappedLines: string[];
+        alpha: number;
+        color: string;
+        headX: number;
+        tailTipY: number;
+        bubH: number;
+        bubX: number;
+        top: number;
+      };
+
+      const toDraw: BubbleToDraw[] = [];
+
+      for (const def of AGENTS) {
+        const bubble = chatBubbles.current.get(def.id);
+        if (!bubble || bubble.alpha <= 0 || !bubble.text) continue;
+        const anim = npcAnims.current.get(def.id);
+        // Skip agents not visible
+        if (anim?.activity === 'in_elevator' || anim?.activity === 'in_elevator_return') continue;
+        if (anim?.activity === 'away' && anim.activityTarget === 'bathroom') continue;
+
+        const floor  = anim?.currentFloor ?? def.floor;
+        const ground = carpetY(floor);
+
+        let headX: number, headY: number;
+        if (!anim || anim.activity === 'desk') {
+          const bob = anim?.isActive ? Math.sin(clock.current * 7) * 1.2 : 0;
+          headX = def.deskX + 2;
+          headY = ground - 90 + bob;
+        } else {
+          headX = anim.personX;
+          headY = ground - 78;
+        }
+
+        const wrappedLines = wrapText(bubble.text, MAX_CHARS);
+        const bubH         = PAD * 2 + wrappedLines.length * LINE_H;
+        const tailTipY     = headY - 18;
+        const defaultTop   = tailTipY - TAIL_H - bubH - 2;
+        // Clamp X so bubble stays within building interior
+        const rawBubX = headX - BUBBLE_W / 2;
+        const bubX    = Math.max(BLD_X + DEPT_W + 4, Math.min(ELEV_X - BUBBLE_W - 4, rawBubX));
+
+        toDraw.push({ wrappedLines, alpha: bubble.alpha, color: def.color, headX, tailTipY, bubH, bubX, top: defaultTop });
+      }
+
+      // Overlap resolution: process bottom-of-screen first, push overlapping bubbles upward
+      toDraw.sort((a, b) => b.tailTipY - a.tailTipY);
+      for (let i = 0; i < toDraw.length; i++) {
+        const b  = toDraw[i];
+        const bX1 = b.bubX, bX2 = b.bubX + BUBBLE_W;
+        for (let j = 0; j < i; j++) {
+          const p  = toDraw[j];
+          const pX1 = p.bubX, pX2 = p.bubX + BUBBLE_W;
+          if (bX1 >= pX2 || bX2 <= pX1) continue; // no X overlap
+          const bBot = b.top + b.bubH;
+          const pBot = p.top + p.bubH;
+          if (b.top < pBot && bBot > p.top) {
+            b.top = p.top - b.bubH - 6;  // push b above p
+          }
+        }
+      }
+
+      // Render each bubble
+      for (const b of toDraw) {
+        const { wrappedLines, alpha, color, headX, tailTipY, bubH, bubX, top } = b;
+
+        // Tail (triangle pointing down to agent's head area)
+        ctx.globalAlpha = alpha * 0.88;
+        ctx.fillStyle   = '#0D1A28';
+        ctx.beginPath();
+        ctx.moveTo(headX - TAIL_BASE / 2, top + bubH);
+        ctx.lineTo(headX + TAIL_BASE / 2, top + bubH);
+        ctx.lineTo(headX, tailTipY);
+        ctx.closePath();
+        ctx.fill();
+
+        // Bubble background
+        ctx.fillStyle   = '#0D1A28';
+        ctx.globalAlpha = alpha * 0.88;
+        ctx.beginPath();
+        ctx.roundRect(bubX, top, BUBBLE_W, bubH, RADIUS);
+        ctx.fill();
+
+        // Colored border
+        ctx.strokeStyle = color;
+        ctx.lineWidth   = 1;
+        ctx.globalAlpha = alpha * 0.6;
+        ctx.beginPath();
+        ctx.roundRect(bubX, top, BUBBLE_W, bubH, RADIUS);
+        ctx.stroke();
+
+        // Color accent dot (left edge)
+        ctx.fillStyle   = color;
+        ctx.globalAlpha = alpha;
+        ctx.beginPath();
+        ctx.arc(bubX + PAD - 1, top + PAD + LINE_H / 2 - 1, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Text
+        ctx.fillStyle     = '#DCE8F5';
+        ctx.font          = '8px monospace';
+        ctx.textAlign     = 'left';
+        ctx.textBaseline  = 'top';
+        for (let li = 0; li < wrappedLines.length; li++) {
+          ctx.fillText(wrappedLines[li], bubX + PAD + 6, top + PAD + li * LINE_H);
+        }
+
+        ctx.globalAlpha  = 1;
+        ctx.textBaseline = 'alphabetic';
+      }
+    }
+
     // ── Packet animations ─────────────────────────────────────────────
     for (const pkt of packets.current) {
       if (pkt.burst > 0) {
@@ -990,6 +1206,34 @@ export const OfficeCanvas = () => {
     for (const anim of npcAnims.current.values()) {
       anim.idleTimer += delta;
       if (anim.isActive) anim.workTimer += delta;
+    }
+
+    // ── Chat bubble timers ────────────────────────────────────────
+    const BUBBLE_FADE = 0.6;
+    for (const bubble of chatBubbles.current.values()) {
+      if (bubble.pauseTimer > 0) {
+        bubble.pauseTimer -= delta;
+        bubble.alpha = 0;
+        if (bubble.pauseTimer <= 0) {
+          bubble.text = bubble.lines[Math.floor(Math.random() * bubble.lines.length)];
+          bubble.displayDuration = 5 + Math.random() * 4;
+          bubble.displayTimer    = bubble.displayDuration;
+        }
+      } else if (bubble.displayTimer > 0) {
+        bubble.displayTimer -= delta;
+        const elapsed = bubble.displayDuration - bubble.displayTimer;
+        if (elapsed < BUBBLE_FADE) {
+          bubble.alpha = elapsed / BUBBLE_FADE;
+        } else if (bubble.displayTimer < BUBBLE_FADE) {
+          bubble.alpha = bubble.displayTimer / BUBBLE_FADE;
+        } else {
+          bubble.alpha = 1;
+        }
+        if (bubble.displayTimer <= 0) {
+          bubble.alpha      = 0;
+          bubble.pauseTimer = 8 + Math.random() * 12;
+        }
+      }
     }
 
     // ── Activity state machine ────────────────────────────────────
