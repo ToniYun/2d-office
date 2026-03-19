@@ -42,21 +42,22 @@ interface AgentDef {
   color: string;
   floor: number;   // 0 = bottom (support), 1 = middle (eng), 2 = top (exec)
   deskX: number;   // virtual X of the worker center within the building
+  rank: number;    // org rank: 1=CEO, 2=CTO, 3=senior, 4=junior
 }
 
 const AGENTS: AgentDef[] = [
-  // Floor 2: Executive suite
-  { id: 'main',           name: 'main',        model: 'gpt-5',             color: '#fbbf24', floor: 2, deskX: 128 },
-  { id: 'claude-opus',    name: 'claude-opus',  model: 'claude-opus-4-6',   color: '#a78bfa', floor: 2, deskX: 315 },
+  // Floor 2: Executive suite (private offices)
+  { id: 'main',           name: 'main',        model: 'gpt-5',             color: '#fbbf24', floor: 2, deskX: 128, rank: 1 },
+  { id: 'claude-opus',    name: 'claude-opus',  model: 'claude-opus-4-6',   color: '#a78bfa', floor: 2, deskX: 315, rank: 2 },
   // Floor 1: Engineering
-  { id: 'research',       name: 'research',     model: 'kimi-k2.5',         color: '#38bdf8', floor: 1, deskX: 120 },
-  { id: 'claude-code',    name: 'claude-code',  model: 'claude-sonnet-4-6', color: '#60a5fa', floor: 1, deskX: 292 },
-  { id: 'codex',          name: 'codex',        model: 'gpt-5.1-codex',     color: '#4ade80', floor: 1, deskX: 464 },
-  { id: 'deepseek-coder', name: 'deepseek',     model: 'deepseek-v2:16b',   color: '#f97316', floor: 1, deskX: 636 },
+  { id: 'research',       name: 'research',     model: 'kimi-k2.5',         color: '#38bdf8', floor: 1, deskX: 120, rank: 3 },
+  { id: 'claude-code',    name: 'claude-code',  model: 'claude-sonnet-4-6', color: '#60a5fa', floor: 1, deskX: 292, rank: 3 },
+  { id: 'codex',          name: 'codex',        model: 'gpt-5.1-codex',     color: '#4ade80', floor: 1, deskX: 464, rank: 3 },
+  { id: 'deepseek-coder', name: 'deepseek',     model: 'deepseek-v2:16b',   color: '#f97316', floor: 1, deskX: 636, rank: 3 },
   // Floor 0: Support
-  { id: 'mistral',        name: 'mistral',      model: 'mistral:latest',    color: '#94a3b8', floor: 0, deskX: 148 },
-  { id: 'llama3',         name: 'llama3',       model: 'llama3:latest',     color: '#fb923c', floor: 0, deskX: 328 },
-  { id: 'qwen-mini',      name: 'qwen-mini',    model: 'qwen2.5:1.5b',      color: '#e879f9', floor: 0, deskX: 508 },
+  { id: 'mistral',        name: 'mistral',      model: 'mistral:latest',    color: '#94a3b8', floor: 0, deskX: 148, rank: 4 },
+  { id: 'llama3',         name: 'llama3',       model: 'llama3:latest',     color: '#fb923c', floor: 0, deskX: 328, rank: 4 },
+  { id: 'qwen-mini',      name: 'qwen-mini',    model: 'qwen2.5:1.5b',      color: '#e879f9', floor: 0, deskX: 508, rank: 4 },
 ];
 
 const PACKET_FROM: Partial<Record<AgentId, AgentId>> = {
@@ -76,19 +77,9 @@ const FLOOR_AMENITIES: Record<number, { waterX: number; bathroomX: number }> = {
   1: { waterX: 748, bathroomX: 686 },
   0: { waterX: 690, bathroomX: 628 },
 };
-// Wander range [minX, maxX] per floor (stays within the occupied office area)
-const FLOOR_WANDER: Record<number, [number, number]> = {
-  2: [80, 460],
-  1: [80, 740],
-  0: [80, 680],
-};
 const AWAY_MIN  = 4;
 const AWAY_MAX  = 14;
-const NEXT_MIN  = 8;
-const NEXT_MAX  = 28;
 const WALK_TIME = 2.0;
-
-const ELEVATOR_TIME = 1.8;  // seconds per floor traversed
 
 // Compute elevator car top-Y for a fractional floor value (0=bottom, 2=top)
 function carTopYForFloor(f: number): number {
@@ -102,29 +93,23 @@ function carTopYForFloor(f: number): number {
 // ── Animation state ──────────────────────────────────────────────
 type Activity =
   | 'desk'
-  | 'walking_away' | 'away' | 'walking_back'           // desk-level activities
-  | 'walking_to_elevator' | 'in_elevator'               // going to another floor
-  | 'walking_from_elevator' | 'exploring'               // on foreign floor
-  | 'walking_back_to_elevator' | 'in_elevator_return'   // returning home
-  | 'walking_to_desk'                                   // last leg home
-  | 'walking_to_conv' | 'chatting';                     // NPC conversation
+  | 'walking_away' | 'away' | 'walking_back'   // amenity trips
+  | 'walking_to_conv' | 'chatting';             // NPC conversation
 
 interface NpcAnim {
   isActive: boolean;
   workTimer: number;
   idleTimer: number;
   activity: Activity;
-  activityTarget: 'water' | 'bathroom' | 'wander' | 'elevator' | null;
+  activityTarget: 'water' | 'bathroom' | null;
   walkProgress: number;
   walkFromX: number;   // X where the current walk segment started
   awayTimer: number;
-  nextActivityIn: number;
   personX: number;
-  wanderX: number;
-  currentFloor: number;        // floor agent is currently on (changes when elevator used)
-  elevFromFloor: number;
-  elevToFloor: number;
-  elevProgress: number;        // 0→1 during elevator ride
+  thirstMeter: number;    // 0→1; triggers water cooler trip when full
+  bathroomMeter: number;  // 0→1; triggers bathroom trip when full
+  thirstRate: number;     // meter units per second
+  bathroomRate: number;   // meter units per second
   convMeetX?: number;          // target X when walking to a conversation spot
   convFacingLeft?: boolean;    // face left while chatting (rightmost participant)
 }
@@ -193,33 +178,36 @@ interface ConvTemplate {
   participants: AgentId[];
   meetXs: Partial<Record<AgentId, number>>;
   castFilter: string[];  // which cast IDs to include from the scene dialogue
+  initiatorId?: AgentId; // who calls the meeting; must outrank all other participants
 }
 
-// Conversation setups: pairs/groups that will walk together and do a scene
+// Conversation setups: pairs/groups that will walk to a meeting spot and do a scene.
+// Hierarchy rule: the initiator's rank must be <= all participants' ranks (higher authority calls meetings).
+// Floor 2 templates always use main (rank 1) as initiator so opus never calls a meeting with the CEO.
 const CONV_TEMPLATES: ConvTemplate[] = [
-  // Floor 2: main ↔ claude-opus
+  // Floor 2: main calls claude-opus (main is initiator — CEO outranks CTO)
   { sceneId: 'kimi_overbooked', floor: 2, participants: ['main', 'claude-opus'],
-    meetXs: { 'main': 185, 'claude-opus': 255 }, castFilter: ['main', 'opus'] },
+    meetXs: { 'main': 185, 'claude-opus': 255 }, castFilter: ['main', 'opus'], initiatorId: 'main' },
   { sceneId: 'new_ticket',      floor: 2, participants: ['main', 'claude-opus'],
-    meetXs: { 'main': 185, 'claude-opus': 255 }, castFilter: ['main', 'opus'] },
+    meetXs: { 'main': 185, 'claude-opus': 255 }, castFilter: ['main', 'opus'], initiatorId: 'main' },
   { sceneId: 'budget_meeting',  floor: 2, participants: ['main', 'claude-opus'],
-    meetXs: { 'main': 185, 'claude-opus': 255 }, castFilter: ['main', 'opus'] },
-  // Floor 1: claude-code ↔ codex
+    meetXs: { 'main': 185, 'claude-opus': 255 }, castFilter: ['main', 'opus'], initiatorId: 'main' },
+  // Floor 1: claude-code ↔ codex (peers — either can call)
   { sceneId: 'code_review',     floor: 1, participants: ['claude-code', 'codex'],
     meetXs: { 'claude-code': 370, 'codex': 440 }, castFilter: ['claude_code', 'codex'] },
   { sceneId: 'cron_broke',      floor: 1, participants: ['claude-code', 'codex'],
     meetXs: { 'claude-code': 370, 'codex': 440 }, castFilter: ['claude_code', 'codex'] },
-  // Floor 1: research ↔ claude-code
+  // Floor 1: research ↔ claude-code (peers — either can call)
   { sceneId: 'kimi_overbooked', floor: 1, participants: ['research', 'claude-code'],
     meetXs: { 'research': 185, 'claude-code': 255 }, castFilter: ['kimi', 'claude_code'] },
   { sceneId: 'budget_meeting',  floor: 1, participants: ['research', 'claude-code'],
     meetXs: { 'research': 185, 'claude-code': 255 }, castFilter: ['kimi', 'claude_code'] },
-  // Floor 0: all three support agents
+  // Floor 0: all three support agents (peers)
   { sceneId: 'morning_standup', floor: 0, participants: ['mistral', 'llama3', 'qwen-mini'],
     meetXs: { 'mistral': 230, 'llama3': 330, 'qwen-mini': 420 }, castFilter: ['mistral', 'llama', 'qwen'] },
   { sceneId: 'cron_broke',      floor: 0, participants: ['qwen-mini', 'llama3', 'mistral'],
     meetXs: { 'qwen-mini': 230, 'llama3': 330, 'mistral': 420 }, castFilter: ['qwen', 'llama', 'mistral'] },
-  // Floor 0: mistral + llama
+  // Floor 0: mistral + llama (peers)
   { sceneId: 'budget_meeting',  floor: 0, participants: ['mistral', 'llama3'],
     meetXs: { 'mistral': 240, 'llama3': 320 }, castFilter: ['mistral', 'llama'] },
 ];
@@ -653,14 +641,14 @@ export const OfficeCanvas = () => {
         activityTarget: null,
         walkProgress: 0,
         awayTimer: 0,
-        nextActivityIn: 2 + Math.random() * 20,
         personX: a.deskX,
         walkFromX: a.deskX,
-        wanderX: a.deskX,
-        currentFloor: a.floor,
-        elevFromFloor: a.floor,
-        elevToFloor: a.floor,
-        elevProgress: 0,
+        // Stagger initial meters so NPCs don't all rush the water cooler at once
+        thirstMeter: Math.random() * 0.6,
+        bathroomMeter: Math.random() * 0.5,
+        // Fill rates: thirst every 60–120 s, bathroom every 90–180 s
+        thirstRate: 1 / (60 + Math.random() * 60),
+        bathroomRate: 1 / (90 + Math.random() * 90),
       });
     }
   }
@@ -675,14 +663,12 @@ export const OfficeCanvas = () => {
         const anim = npcAnims.current.get(agentId as AgentId);
         if (!def || !anim) continue;
         anim.isActive = true;
-        // Snap back to desk immediately if away (even if on another floor)
+        // Snap back to desk immediately if away
         if (anim.activity !== 'desk') {
-          anim.activity     = 'desk';
+          anim.activity       = 'desk';
           anim.activityTarget = null;
-          anim.walkProgress = 0;
-          anim.currentFloor = def.floor;
-          anim.personX      = def.deskX;
-          anim.nextActivityIn = NEXT_MIN + Math.random() * (NEXT_MAX - NEXT_MIN);
+          anim.walkProgress   = 0;
+          anim.personX        = def.deskX;
         }
         // Spawn packet from sender's head
         const fromId = PACKET_FROM[agentId as AgentId];
@@ -709,8 +695,6 @@ export const OfficeCanvas = () => {
         const anim = npcAnims.current.get(agentId as AgentId);
         if (!anim) continue;
         anim.isActive = false;
-        // Give them a full desk cooldown before wandering again
-        anim.nextActivityIn = NEXT_MIN + Math.random() * (NEXT_MAX - NEXT_MIN);
         if (agentId === 'claude-code') {
           for (const dep of ['codex', 'deepseek-coder'] as AgentId[]) {
             const da = npcAnims.current.get(dep);
@@ -885,11 +869,38 @@ export const OfficeCanvas = () => {
       drawBathroomDoor(ctx, am.bathroomX, fc.f);
       drawWaterCooler(ctx, am.waterX, fc.f);
 
-      // ── Executive floor: meeting room (right half) ───────────────
+      // ── Executive floor: private offices + boardroom ─────────────
       if (fc.f === 2) {
         const mrX = BLD_X + DEPT_W + 420;
         const mrW = iRight - (BLD_X + DEPT_W + 420) - 70;
-        // Glass partition wall
+
+        // Private office divider wall between CEO (main) and CTO (opus)
+        // CEO office: x=60–232  |  CTO office: x=232–480  |  Boardroom: x=480+
+        const divX = BLD_X + DEPT_W + 172;  // = 232
+        const wallTop = iTop + SLAB_H;
+        const doorH   = 22;  // door opening height at floor level
+        const doorW   = 18;  // door opening width
+
+        // Divider wall — solid, with a doorway gap at the bottom
+        ctx.fillStyle = '#8A9AAA';
+        ctx.fillRect(divX, wallTop, 3, iH - SLAB_H - doorH);
+        // Door lintel
+        ctx.fillStyle = '#6A8A9A';
+        ctx.fillRect(divX - 2, wallTop + iH - SLAB_H - doorH, 7, 3);
+
+        // Office name plates on the back wall
+        ctx.fillStyle = rgba('#1E4E8A', 0.55);
+        ctx.font = 'bold 7px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillText('CEO OFFICE', BLD_X + DEPT_W + 86, wallTop + 12);
+        ctx.fillText('CTO OFFICE', (divX + mrX) / 2, wallTop + 12);
+
+        // Door frame nub on CEO side (small rectangle to suggest a door)
+        ctx.fillStyle = '#7A8A98';
+        ctx.fillRect(divX - doorW, wallTop + iH - SLAB_H - doorH, doorW, 2);
+
+        // Boardroom partition (dashed glass)
         ctx.strokeStyle = '#90B8D8';
         ctx.lineWidth = 2;
         ctx.setLineDash([6, 4]);
@@ -949,22 +960,6 @@ export const OfficeCanvas = () => {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('LIFT', ELEV_X + ELEV_W / 2, carTopY + carH2 / 2);
-    // Draw any agents currently riding the elevator
-    for (const def of AGENTS) {
-      const anim = npcAnims.current.get(def.id);
-      if (!anim) continue;
-      if (anim.activity !== 'in_elevator' && anim.activity !== 'in_elevator_return') continue;
-      const px = ELEV_X + ELEV_W / 2;
-      const ground = carTopY + carH2;
-      ctx.fillStyle = '#252535';
-      ctx.fillRect(px - 5, ground - 30, 5, 26); ctx.fillRect(px + 1, ground - 30, 5, 26);
-      ctx.fillStyle = def.color;
-      ctx.fillRect(px - 7, ground - 62, 15, 32);
-      ctx.fillStyle = '#F5CBA7';
-      ctx.beginPath(); ctx.ellipse(px + 1, ground - 75, 8, 10, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = def.color;
-      ctx.beginPath(); ctx.ellipse(px, ground - 82, 8, 6, 0, Math.PI, Math.PI * 2); ctx.fill();
-    }
     // Up/down arrows on shaft
     ctx.fillStyle = '#7A8A9A';
     ctx.font = '10px sans-serif';
@@ -1036,24 +1031,14 @@ export const OfficeCanvas = () => {
     for (const def of AGENTS) {
       const anim = npcAnims.current.get(def.id);
       if (!anim || anim.activity === 'desk') continue;
-      // Inside elevator car — drawn above with the car
-      if (anim.activity === 'in_elevator' || anim.activity === 'in_elevator_return') continue;
       // Inside bathroom — not visible
       if (anim.activity === 'away' && anim.activityTarget === 'bathroom') continue;
-      // Use currentFloor so explorer shows on the correct floor
-      const drawFloor = anim.currentFloor ?? def.floor;
       const isChatting = anim.activity === 'chatting';
-      const drawAct = (
-        anim.activity === 'exploring' ||
-        anim.activity === 'walking_from_elevator' ||
-        anim.activity === 'walking_back_to_elevator' ||
-        anim.activity === 'walking_to_desk' ||
-        anim.activity === 'walking_to_conv'
-      ) ? 'walking_away' : isChatting ? 'away' : anim.activity;
+      const drawAct = anim.activity === 'walking_to_conv' ? 'walking_away' : isChatting ? 'away' : anim.activity;
       drawStandingPerson(
-        ctx, anim.personX, drawFloor, def.color, clock.current,
+        ctx, anim.personX, def.floor, def.color, clock.current,
         drawAct as 'walking_away' | 'away' | 'walking_back',
-        anim.activityTarget === 'wander' || anim.activityTarget === 'elevator' ? null : anim.activityTarget,
+        anim.activityTarget,
         isChatting && anim.convFacingLeft === true,
       );
     }
@@ -1086,10 +1071,9 @@ export const OfficeCanvas = () => {
         if (!bubble || bubble.alpha <= 0 || !bubble.text) continue;
         const anim = npcAnims.current.get(def.id);
         // Skip agents not visible
-        if (anim?.activity === 'in_elevator' || anim?.activity === 'in_elevator_return') continue;
         if (anim?.activity === 'away' && anim.activityTarget === 'bathroom') continue;
 
-        const floor  = anim?.currentFloor ?? def.floor;
+        const floor  = def.floor;
         const ground = carpetY(floor);
 
         let headX: number, headY: number;
@@ -1311,28 +1295,25 @@ export const OfficeCanvas = () => {
 
       // Defensive re-init (handles HMR without component remount)
       if (!anim.activity) {
-        anim.activity       = 'desk';
-        anim.activityTarget = null;
-        anim.walkProgress   = 0;
-        anim.awayTimer      = 0;
-        if (anim.nextActivityIn == null) anim.nextActivityIn = NEXT_MIN + Math.random() * (NEXT_MAX - NEXT_MIN);
-        if (anim.personX       == null) anim.personX        = def.deskX;
-        if (anim.walkFromX     == null) anim.walkFromX      = def.deskX;
-        if (anim.wanderX       == null) anim.wanderX        = def.deskX;
-        if (anim.currentFloor  == null) anim.currentFloor   = def.floor;
-        if (anim.elevFromFloor == null) anim.elevFromFloor  = def.floor;
-        if (anim.elevToFloor   == null) anim.elevToFloor    = def.floor;
-        if (anim.elevProgress  == null) anim.elevProgress   = 0;
+        anim.activity         = 'desk';
+        anim.activityTarget   = null;
+        anim.walkProgress     = 0;
+        anim.awayTimer        = 0;
+        if (anim.personX   == null) anim.personX   = def.deskX;
+        if (anim.walkFromX == null) anim.walkFromX = def.deskX;
+        if (anim.thirstMeter   == null) anim.thirstMeter   = Math.random() * 0.5;
+        if (anim.bathroomMeter == null) anim.bathroomMeter = Math.random() * 0.5;
+        if (anim.thirstRate    == null) anim.thirstRate    = 1 / (60 + Math.random() * 60);
+        if (anim.bathroomRate  == null) anim.bathroomRate  = 1 / (90 + Math.random() * 90);
       }
 
       const isWorking = anim.isActive || activeAgents.has(def.id);
       if (isWorking) {
-        // Recall to desk from anywhere — including elevator / foreign floor
+        // Recall to desk while working
         if (anim.activity !== 'desk') {
           anim.activity       = 'desk';
           anim.activityTarget = null;
           anim.walkProgress   = 0;
-          anim.currentFloor   = def.floor;
           anim.personX        = def.deskX;
         } else {
           anim.personX = def.deskX;
@@ -1340,14 +1321,10 @@ export const OfficeCanvas = () => {
         continue;
       }
 
-      const floorAm = FLOOR_AMENITIES[anim.currentFloor] ?? am;
-      const floorWr = FLOOR_WANDER[anim.currentFloor] ?? FLOOR_WANDER[def.floor];
-
-      const getTargetX = (): number => {
-        if (anim.activityTarget === 'water')    return floorAm.waterX;
-        if (anim.activityTarget === 'bathroom') return floorAm.bathroomX;
-        if (anim.activityTarget === 'elevator') return ELEV_X;
-        return anim.wanderX ?? def.deskX;
+      const getAmenityX = (): number => {
+        if (anim.activityTarget === 'water')    return am.waterX;
+        if (anim.activityTarget === 'bathroom') return am.bathroomX;
+        return def.deskX;
       };
 
       const walkTo = (toX: number, next: Activity, speed = WALK_TIME, onArrive?: () => void) => {
@@ -1360,107 +1337,37 @@ export const OfficeCanvas = () => {
       };
 
       if (anim.activity === 'desk') {
-        anim.personX      = def.deskX;
-        anim.currentFloor = def.floor;
-        anim.nextActivityIn -= delta;
-        if (anim.nextActivityIn <= 0) {
-          const roll = Math.random();
-          if (roll < 0.22) {
-            anim.activityTarget = 'water';
-            anim.walkFromX = anim.personX; anim.activity = 'walking_away'; anim.walkProgress = 0;
-          } else if (roll < 0.35) {
-            anim.activityTarget = 'bathroom';
-            anim.walkFromX = anim.personX; anim.activity = 'walking_away'; anim.walkProgress = 0;
-          } else if (roll < 0.60) {
-            anim.activityTarget = 'wander';
-            const [minX, maxX] = FLOOR_WANDER[def.floor];
-            anim.wanderX = minX + Math.random() * (maxX - minX);
-            anim.walkFromX = anim.personX; anim.activity = 'walking_away'; anim.walkProgress = 0;
-          } else {
-            anim.activityTarget = 'elevator';
-            const others = [0, 1, 2].filter(f => f !== def.floor);
-            anim.elevToFloor   = others[Math.floor(Math.random() * others.length)];
-            anim.elevFromFloor = def.floor;
-            anim.walkFromX = anim.personX; anim.activity = 'walking_to_elevator'; anim.walkProgress = 0;
-          }
+        anim.personX = def.deskX;
+
+        // Accumulate thirst and bathroom meters while sitting
+        anim.thirstMeter   = Math.min(1, anim.thirstMeter   + delta * anim.thirstRate);
+        anim.bathroomMeter = Math.min(1, anim.bathroomMeter + delta * anim.bathroomRate);
+
+        if (anim.thirstMeter >= 1) {
+          anim.thirstMeter    = 0;
+          anim.activityTarget = 'water';
+          anim.walkFromX = anim.personX; anim.activity = 'walking_away'; anim.walkProgress = 0;
+        } else if (anim.bathroomMeter >= 1) {
+          anim.bathroomMeter  = 0;
+          anim.activityTarget = 'bathroom';
+          anim.walkFromX = anim.personX; anim.activity = 'walking_away'; anim.walkProgress = 0;
         }
 
       } else if (anim.activity === 'walking_away') {
-        walkTo(getTargetX(), 'away', WALK_TIME, () => { anim.awayTimer = AWAY_MIN + Math.random() * (AWAY_MAX - AWAY_MIN); });
+        walkTo(getAmenityX(), 'away', WALK_TIME, () => {
+          anim.awayTimer = AWAY_MIN + Math.random() * (AWAY_MAX - AWAY_MIN);
+        });
 
       } else if (anim.activity === 'away') {
-        anim.personX    = getTargetX();
+        anim.personX    = getAmenityX();
         anim.awayTimer -= delta;
         if (anim.awayTimer <= 0) {
-          if (anim.activityTarget === 'wander' && Math.random() < 0.5) {
-            const [minX, maxX] = floorWr;
-            anim.wanderX   = minX + Math.random() * (maxX - minX);
-            anim.walkFromX = anim.personX; anim.walkProgress = 0; anim.activity = 'walking_away';
-          } else {
-            anim.walkFromX = anim.personX; anim.walkProgress = 0; anim.activity = 'walking_back';
-          }
+          anim.walkFromX = anim.personX; anim.walkProgress = 0; anim.activity = 'walking_back';
         }
 
       } else if (anim.activity === 'walking_back') {
         walkTo(def.deskX, 'desk', WALK_TIME, () => {
           anim.activityTarget = null; anim.personX = def.deskX;
-          anim.nextActivityIn = NEXT_MIN + Math.random() * (NEXT_MAX - NEXT_MIN);
-        });
-
-      // ── Elevator outbound ──────────────────────────────────────────
-      } else if (anim.activity === 'walking_to_elevator') {
-        walkTo(ELEV_X, 'in_elevator', WALK_TIME * 1.3, () => { anim.elevProgress = 0; anim.personX = ELEV_X; });
-
-      } else if (anim.activity === 'in_elevator') {
-        const floors = Math.max(1, Math.abs(anim.elevToFloor - anim.elevFromFloor));
-        anim.elevProgress = Math.min(1, anim.elevProgress + delta / (ELEVATOR_TIME * floors));
-        elevCarFloor.current = anim.elevFromFloor + (anim.elevToFloor - anim.elevFromFloor) * anim.elevProgress;
-        if (anim.elevProgress >= 1) {
-          anim.currentFloor = anim.elevToFloor;
-          const [minX, maxX] = FLOOR_WANDER[anim.currentFloor];
-          anim.wanderX = minX + Math.random() * (maxX - minX);
-          anim.walkFromX = ELEV_X; anim.walkProgress = 0; anim.activity = 'walking_from_elevator';
-        }
-
-      } else if (anim.activity === 'walking_from_elevator') {
-        walkTo(anim.wanderX, 'exploring', WALK_TIME, () => { anim.awayTimer = (AWAY_MIN + Math.random() * AWAY_MAX) * 2.5; });
-
-      } else if (anim.activity === 'exploring') {
-        anim.personX    = anim.wanderX;
-        anim.awayTimer -= delta;
-        if (anim.awayTimer <= 0) {
-          if (Math.random() < 0.55) {
-            const [minX, maxX] = FLOOR_WANDER[anim.currentFloor];
-            anim.wanderX   = minX + Math.random() * (maxX - minX);
-            anim.walkFromX = anim.personX; anim.walkProgress = 0;
-            anim.activity  = 'walking_from_elevator';
-            anim.awayTimer = (AWAY_MIN + Math.random() * AWAY_MAX) * 1.5;
-          } else {
-            anim.walkFromX = anim.personX; anim.walkProgress = 0;
-            anim.activity  = 'walking_back_to_elevator';
-          }
-        }
-
-      // ── Elevator return ────────────────────────────────────────────
-      } else if (anim.activity === 'walking_back_to_elevator') {
-        walkTo(ELEV_X, 'in_elevator_return', WALK_TIME * 1.3, () => {
-          anim.elevFromFloor = anim.currentFloor; anim.elevToFloor = def.floor;
-          anim.elevProgress = 0; anim.personX = ELEV_X;
-        });
-
-      } else if (anim.activity === 'in_elevator_return') {
-        const floors = Math.max(1, Math.abs(anim.elevToFloor - anim.elevFromFloor));
-        anim.elevProgress = Math.min(1, anim.elevProgress + delta / (ELEVATOR_TIME * floors));
-        elevCarFloor.current = anim.elevFromFloor + (anim.elevToFloor - anim.elevFromFloor) * anim.elevProgress;
-        if (anim.elevProgress >= 1) {
-          anim.currentFloor = def.floor;
-          anim.walkFromX = ELEV_X; anim.walkProgress = 0; anim.activity = 'walking_to_desk';
-        }
-
-      } else if (anim.activity === 'walking_to_desk') {
-        walkTo(def.deskX, 'desk', WALK_TIME, () => {
-          anim.activityTarget = null; anim.personX = def.deskX;
-          anim.nextActivityIn = NEXT_MIN + Math.random() * (NEXT_MAX - NEXT_MIN);
         });
 
       // ── Conversation activities ────────────────────────────────────
@@ -1559,12 +1466,22 @@ export const OfficeCanvas = () => {
         // Countdown to the next spontaneous conversation
         nextConvIn.current -= delta;
         if (nextConvIn.current <= 0) {
-          const eligible = CONV_TEMPLATES.filter(t =>
-            t.participants.every(id => {
+          const eligible = CONV_TEMPLATES.filter(t => {
+            // All participants must be idle at their desks
+            if (!t.participants.every(id => {
               const a = npcAnims.current.get(id);
               return a?.activity === 'desk' && !a.isActive && !activeAgentsNow.has(id);
-            })
-          );
+            })) return false;
+            // Hierarchy: the initiator's rank must be <= all other participants' ranks
+            // (lower rank number = higher authority; you can't call a meeting with your boss)
+            const initiatorId   = t.initiatorId ?? t.participants[0];
+            const initiatorDef  = AGENTS.find(a => a.id === initiatorId);
+            const initiatorRank = initiatorDef?.rank ?? 99;
+            return t.participants.every(id => {
+              const d = AGENTS.find(a => a.id === id);
+              return (d?.rank ?? 99) >= initiatorRank;
+            });
+          });
           if (eligible.length === 0) {
             nextConvIn.current = 10 + Math.random() * 15;
           } else {
