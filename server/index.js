@@ -314,9 +314,13 @@ function startAgentWatcher(dirName) {
 
         if (newKeys.length > 0) {
           const from = HANDOFF_FROM[npcId] ?? 'main';
-          console.log(`[handoff] ${from} → ${npcId} (new session: ${newKeys.join(', ')})`);
-          io.emit('agentHandoff', { from, to: npcId });
-          notifyHandoff(from, npcId);
+          if (from === npcId) {
+            console.log(`[handoff] skipping self-handoff for ${npcId}`);
+          } else {
+            console.log(`[handoff] ${from} → ${npcId} (new session: ${newKeys.join(', ')})`);
+            io.emit('agentHandoff', { from, to: npcId });
+            notifyHandoff(from, npcId);
+          }
         }
 
         // ── Activity detection ────────────────────────────────────────────
