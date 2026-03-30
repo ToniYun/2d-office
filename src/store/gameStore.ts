@@ -56,9 +56,10 @@ export const useGameStore = create<GameStore>((set) => ({
     next.delete(agentId);
     return { agentIdleQueue: [...s.agentIdleQueue, agentId], activeAgents: next };
   }),
-  pushHandoff: (entry) => set((s) => ({
-    handoffLog: [entry, ...s.handoffLog].slice(0, 6),
-  })),
+  pushHandoff: (entry) => {
+    if (entry.from === entry.to) return;
+    set((s) => ({ handoffLog: [entry, ...s.handoffLog].slice(0, 6) }));
+  },
   setLocalPlayer: (player) => set({ localPlayer: player }),
   setLocalPlayerId: (id) => set({ localPlayerId: id }),
   addPlayer: (player) => set((state) => ({ players: { ...state.players, [player.id]: player } })),

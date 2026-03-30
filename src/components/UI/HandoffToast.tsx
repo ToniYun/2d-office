@@ -33,6 +33,7 @@ export const HandoffToast = () => {
   return (
     <div className="absolute bottom-12 left-[17rem] flex flex-col gap-1.5">
       {log.map((entry, i) => {
+        if (entry.from === entry.to) return null;
         const fromColor = AGENT_COLOR[entry.from] ?? '#64748b';
         const toColor   = AGENT_COLOR[entry.to]   ?? '#64748b';
         const age = (Date.now() - entry.at) / 1000;
