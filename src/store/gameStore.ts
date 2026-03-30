@@ -17,6 +17,7 @@ interface GameStore {
   activeAgents: Set<string>;
   handoffLog: HandoffEntry[];
   roleplayOpen: boolean;
+  recruiterCoachOpen: boolean;
 
   setPhase: (phase: GamePhase) => void;
   pushAgentJob: (agentId: string) => void;
@@ -29,6 +30,7 @@ interface GameStore {
   updatePlayer: (id: string, data: Partial<PlayerData>) => void;
   setPlayers: (players: PlayerData[]) => void;
   toggleRoleplay: () => void;
+  toggleRecruiterCoach: () => void;
 }
 
 export const useGameStore = create<GameStore>((set) => ({
@@ -41,6 +43,7 @@ export const useGameStore = create<GameStore>((set) => ({
   activeAgents: new Set<string>(),
   handoffLog: [],
   roleplayOpen: false,
+  recruiterCoachOpen: false,
 
   setPhase: (phase) => set({ phase }),
   pushAgentJob: (agentId) => set((s) => {
@@ -70,5 +73,6 @@ export const useGameStore = create<GameStore>((set) => ({
   setPlayers: (players) => set({
     players: players.reduce<Record<string, PlayerData>>((acc, p) => ({ ...acc, [p.id]: p }), {}),
   }),
-  toggleRoleplay: () => set((s) => ({ roleplayOpen: !s.roleplayOpen })),
+  toggleRoleplay: () => set((s) => ({ roleplayOpen: !s.roleplayOpen, recruiterCoachOpen: false })),
+  toggleRecruiterCoach: () => set((s) => ({ recruiterCoachOpen: !s.recruiterCoachOpen, roleplayOpen: false })),
 }));

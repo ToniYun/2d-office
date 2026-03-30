@@ -9,6 +9,8 @@ export const HUD = () => {
   const localPlayer = useGameStore((s) => s.localPlayer);
   const roleplayOpen = useGameStore((s) => s.roleplayOpen);
   const toggleRoleplay = useGameStore((s) => s.toggleRoleplay);
+  const recruiterCoachOpen = useGameStore((s) => s.recruiterCoachOpen);
+  const toggleRecruiterCoach = useGameStore((s) => s.toggleRecruiterCoach);
 
   const playerList = Object.values(players);
 
@@ -40,6 +42,18 @@ export const HUD = () => {
             }}
           >
             🎭 Scenes
+          </button>
+          <button
+            onClick={toggleRecruiterCoach}
+            className="text-xs font-bold px-2.5 py-1 rounded-full transition-all"
+            style={{
+              pointerEvents: 'all',
+              background: recruiterCoachOpen ? '#1e3a5f' : 'rgba(255,255,255,0.15)',
+              color: recruiterCoachOpen ? '#60a5fa' : '#c7d2fe',
+              border: '1px solid rgba(255,255,255,0.25)',
+            }}
+          >
+            🎯 Career
           </button>
         </div>
       </div>

@@ -2,6 +2,7 @@ import { LandingScreen } from './components/UI/LandingScreen';
 import { HUD } from './components/UI/HUD';
 import { OfficeCanvas } from './components/OfficeCanvas';
 import { RoleplayPanel } from './components/UI/RoleplayPanel';
+import { RecruiterCoachPanel } from './components/UI/RecruiterCoachPanel';
 import { useGameStore } from './store/gameStore';
 import { useSocket } from './hooks/useSocket';
 
@@ -25,6 +26,7 @@ export const App = () => {
           <OfficeCanvas />
           <HUD />
           <RoleplayPanel />
+          <RecruiterCoachPanel />
         </>
       )}
     </div>
