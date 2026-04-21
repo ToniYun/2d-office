@@ -43,21 +43,33 @@ export const HandoffToast = () => {
         return (
           <div
             key={i}
-            className="flex items-center gap-2 bg-white rounded-xl px-3 py-1.5 shadow-md border border-blue-100"
-            style={{ opacity }}
+            className="flex items-center gap-2 px-3 py-1.5"
+            style={{
+              opacity,
+              background: 'rgba(8,14,26,0.82)',
+              backdropFilter: 'blur(16px)',
+              border: '1px solid rgba(96,165,250,0.1)',
+              borderRadius: 12,
+              boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+            }}
           >
-            {/* Delegation icon */}
-            <span className="text-blue-400 text-xs">🔀</span>
+            {/* Icon */}
+            <span style={{ fontSize: 12, opacity: 0.6 }}>🔀</span>
 
-            {/* From */}
+            {/* From badge */}
             <span
-              className="text-xs font-bold px-1.5 py-0.5 rounded-md"
-              style={{ color: fromColor, backgroundColor: fromColor + '18' }}
+              className="font-bold px-1.5 py-0.5 rounded"
+              style={{
+                color: fromColor,
+                background: fromColor + '18',
+                border: `1px solid ${fromColor}28`,
+                fontSize: 10,
+              }}
             >
               {entry.from}
             </span>
 
-            {/* Arrow */}
+            {/* Gradient arrow */}
             <svg width="20" height="8" viewBox="0 0 20 8">
               <defs>
                 <linearGradient id={`hg${i}`} x1="0" y1="0" x2="1" y2="0">
@@ -65,20 +77,25 @@ export const HandoffToast = () => {
                   <stop offset="100%" stopColor={toColor} />
                 </linearGradient>
               </defs>
-              <line x1="0" y1="4" x2="13" y2="4" stroke={`url(#hg${i})`} strokeWidth="2" />
+              <line x1="0" y1="4" x2="13" y2="4" stroke={`url(#hg${i})`} strokeWidth="1.5" />
               <path d="M13 1.5 L20 4 L13 6.5" fill="none" stroke={toColor} strokeWidth="1.5" />
             </svg>
 
-            {/* To */}
+            {/* To badge */}
             <span
-              className="text-xs font-bold px-1.5 py-0.5 rounded-md"
-              style={{ color: toColor, backgroundColor: toColor + '18' }}
+              className="font-bold px-1.5 py-0.5 rounded"
+              style={{
+                color: toColor,
+                background: toColor + '18',
+                border: `1px solid ${toColor}28`,
+                fontSize: 10,
+              }}
             >
               {entry.to}
             </span>
 
             {/* Time */}
-            <span className="text-gray-400 text-xs ml-0.5">{relativeTime(entry.at)}</span>
+            <span style={{ color: '#1E3050', fontSize: 10, marginLeft: 2 }}>{relativeTime(entry.at)}</span>
           </div>
         );
       })}

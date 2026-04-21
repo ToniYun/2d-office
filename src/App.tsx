@@ -2,7 +2,6 @@ import { LandingScreen } from './components/UI/LandingScreen';
 import { HUD } from './components/UI/HUD';
 import { OfficeCanvas } from './components/OfficeCanvas';
 import { RoleplayPanel } from './components/UI/RoleplayPanel';
-import { RecruiterCoachPanel } from './components/UI/RecruiterCoachPanel';
 import { useGameStore } from './store/gameStore';
 import { useSocket } from './hooks/useSocket';
 
@@ -19,14 +18,13 @@ export const App = () => {
   };
 
   return (
-    <div style={{ width: '100vw', height: '100vh', position: 'relative', background: '#EEF2F7' }}>
+    <div style={{ width: '100vw', height: '100vh', position: 'relative', background: '#03060E' }}>
       {phase === 'landing' && <LandingScreen onJoin={handleJoin} />}
       {phase === 'playing' && (
         <>
           <OfficeCanvas />
           <HUD />
           <RoleplayPanel />
-          <RecruiterCoachPanel />
         </>
       )}
     </div>

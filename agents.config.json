@@ -1,0 +1,106 @@
+{
+  "company": "AI Corp.",
+  "agents": [
+    {
+      "id": "ceo",
+      "name": "ceo",
+      "role": "CEO / Router",
+      "model": "gpt-4o",
+      "color": "#fbbf24",
+      "floor": 2,
+      "tier": "exec",
+      "description": "Routes work to the right agents. High-level decision maker."
+    },
+    {
+      "id": "cto",
+      "name": "cto",
+      "role": "CTO / Architect",
+      "model": "claude-opus-4",
+      "color": "#a78bfa",
+      "floor": 2,
+      "tier": "exec",
+      "description": "Handles architecture, strategy, and long-horizon planning."
+    },
+    {
+      "id": "researcher",
+      "name": "researcher",
+      "role": "Research Lead",
+      "model": "your-research-model",
+      "color": "#38bdf8",
+      "floor": 1,
+      "tier": "senior",
+      "description": "Deep dives, benchmarks, and synthesis. Heavy context user."
+    },
+    {
+      "id": "engineer",
+      "name": "engineer",
+      "role": "Senior Engineer",
+      "model": "claude-sonnet-4",
+      "color": "#60a5fa",
+      "floor": 1,
+      "tier": "senior",
+      "description": "Writes and reviews production code. Prefers clean specs."
+    },
+    {
+      "id": "qa",
+      "name": "qa",
+      "role": "QA Engineer",
+      "model": "your-qa-model",
+      "color": "#4ade80",
+      "floor": 1,
+      "tier": "senior",
+      "description": "Reviews code, writes tests, finds edge cases."
+    },
+    {
+      "id": "backend",
+      "name": "backend",
+      "role": "Backend Developer",
+      "model": "your-coding-model",
+      "color": "#f97316",
+      "floor": 1,
+      "tier": "senior",
+      "description": "Focused implementation. Fast and low-overhead."
+    },
+    {
+      "id": "analyst",
+      "name": "analyst",
+      "role": "Analyst / Scribe",
+      "model": "your-lightweight-model",
+      "color": "#94a3b8",
+      "floor": 0,
+      "tier": "junior",
+      "description": "Summarizes, logs, and keeps notes organized."
+    },
+    {
+      "id": "ops",
+      "name": "ops",
+      "role": "Ops Generalist",
+      "model": "your-ops-model",
+      "color": "#fb923c",
+      "floor": 0,
+      "tier": "junior",
+      "description": "Handles tasks, crons, and infrastructure checks."
+    },
+    {
+      "id": "intern",
+      "name": "intern",
+      "role": "Intern / Heartbeat",
+      "model": "your-small-model",
+      "color": "#e879f9",
+      "floor": 0,
+      "tier": "junior",
+      "description": "Lightweight heartbeat and small task runner."
+    }
+  ],
+  "handoffRouting": {
+    "cto":        "ceo",
+    "researcher": "ceo",
+    "engineer":   "ceo",
+    "qa":         "engineer",
+    "backend":    "engineer",
+    "analyst":    "ceo",
+    "ops":        "ceo",
+    "intern":     "ceo"
+  },
+  "processWatchers": []
+}

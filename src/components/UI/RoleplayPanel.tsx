@@ -38,7 +38,7 @@ export const RoleplayPanel = () => {
       >
         <div>
           <h2 className="text-white font-black text-sm tracking-wider uppercase">Office Scenes</h2>
-          <p className="text-indigo-200 text-xs mt-0.5">OpenClaw Corp. Drama™</p>
+          <p className="text-indigo-200 text-xs mt-0.5">AI Corp. Drama™</p>
         </div>
         <button
           onClick={toggleRoleplay}
